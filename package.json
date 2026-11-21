@@ -1,0 +1,12 @@
+{
+  "name": "selov-asx",
+  "version": "1.0.0",
+  "description": "Selov asx — 3D storefront, GCash top-up, share orders, live chat and private admin dashboard. Zero dependencies.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": { "node": ">=18" },
+  "license": "UNLICENSED",
+  "private": true
+}
