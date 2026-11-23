@@ -223,6 +223,7 @@ footer .wrap{display:flex;align-items:center;justify-content:space-between;gap:2
 .work-body{display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:18px 20px 20px;flex:1}
 .work-body h3{font-size:20px;line-height:1.25}
 .work-body p{color:var(--mute);font-size:14px;line-height:1.55;flex:1}
+.work-price{display:inline-block;margin-top:2px;padding:5px 12px;border-radius:999px;font-size:12px;font-weight:800;letter-spacing:.02em;color:#fff;background:linear-gradient(135deg,rgba(255,79,168,.35),rgba(124,92,255,.35));border:1px solid var(--line)}
 .work-go{margin-top:6px}
 .work:hover .work-go{filter:brightness(1.15);transform:perspective(700px) translateY(-2px)}
 
@@ -400,17 +401,17 @@ footer .wrap{display:flex;align-items:center;justify-content:space-between;gap:2
 <section id="portfolio">
  <div class="wrap">
   <div class="sec-head reveal"><div><div class="eyebrow">Portfolio</div><h2>Web Apps &amp; Tools</h2><p class="mute" style="margin-top:8px;max-width:560px;font-size:15px">A selection of live projects by Selov asx. Choose a project to explore.</p></div></div>
-  <div class="grid3 works reveal">
+  <div class="grid3 works reveal" id="worksGrid">
    <a class="work tilt" href="https://multisave.freedev.app" target="_blank" rel="noopener noreferrer">
-    <div class="work-art w1"><img class="work-preview" src="assets/portfolio-multisave.webp" alt="Screenshot preview of the MultiSave video downloader"><span class="dom">multisave.freedev.app</span></div>
+    <div class="work-art w1"><img class="work-preview" src="/assets/portfolio-multisave.webp" alt="Screenshot preview of the MultiSave video downloader"><span class="dom">multisave.freedev.app</span></div>
     <div class="work-body"><span class="badge ok">Downloader</span><h3>MultiSave</h3><p>Download YouTube videos as MP4 or audio as MP3, plus media from TikTok, Facebook, Instagram, X, Pinterest, Snapchat, CapCut, Threads, Likee and Spotify.</p><span class="abtn sm work-go">Visit site ↗</span></div>
    </a>
    <a class="work tilt" href="https://jaysoundcloud.onrender.com" target="_blank" rel="noopener noreferrer">
-    <div class="work-art w2"><img class="work-preview" src="assets/portfolio-jaysoundcloud.webp" alt="Screenshot preview of the JaySoundCloud music app"><span class="dom">jaysoundcloud.onrender.com</span></div>
+    <div class="work-art w2"><img class="work-preview" src="/assets/portfolio-jaysoundcloud.webp" alt="Screenshot preview of the JaySoundCloud music app"><span class="dom">jaysoundcloud.onrender.com</span></div>
     <div class="work-body"><span class="badge warn">Music app</span><h3>JaySoundCloud</h3><p>Discover OPM through live radio, music recommendations and playlists in a simple web app.</p><span class="abtn sm work-go">Visit site ↗</span></div>
    </a>
    <a class="work tilt" href="https://strangercamm.onrender.com/" target="_blank" rel="noopener noreferrer">
-    <div class="work-art w3"><img class="work-preview" src="assets/portfolio-strangercam.webp" alt="Screenshot preview of the Stranger Cam video chat site"><span class="dom">strangercamm.onrender.com</span></div>
+    <div class="work-art w3"><img class="work-preview" src="/assets/portfolio-strangercam.webp" alt="Screenshot preview of the Stranger Cam video chat site"><span class="dom">strangercamm.onrender.com</span></div>
     <div class="work-body"><span class="badge">Video chat</span><h3>Stranger Cam</h3><p>Meet new people through random video chat, or switch to text chat from your browser.</p><span class="abtn sm work-go">Visit site ↗</span></div>
    </a>
   </div>
@@ -959,10 +960,37 @@ footer .wrap{display:flex;align-items:center;justify-content:space-between;gap:2
     }).catch(function () { });
   }
 
+
+  /* ---------- portfolio (edited from the admin dashboard) ---------- */
+  function loadPortfolio() {
+    return api('/api/portfolio').then(function (list) {
+      var grid = document.getElementById('worksGrid');
+      if (!grid || !Array.isArray(list) || !list.length) return;
+      grid.textContent = '';
+      list.forEach(function (p, i) {
+        var host = ''; try { host = new URL(p.link).host; } catch (e) { }
+        var art = h('div', { 'class': 'work-art w' + ((i % 3) + 1) });
+        if (p.image) {
+          var im = h('img', { 'class': 'work-preview', src: p.image, alt: 'Screenshot preview of ' + p.title, loading: 'lazy' });
+          im.onerror = function () { im.remove(); };
+          art.appendChild(im);
+        }
+        art.appendChild(h('span', { 'class': 'dom' }, host));
+        var body = h('div', { 'class': 'work-body' });
+        if (p.badge) body.appendChild(h('span', { 'class': 'badge ' + (p.tone === 'warn' ? 'warn' : 'ok') }, p.badge));
+        body.appendChild(h('h3', null, p.title));
+        body.appendChild(h('p', null, p.desc));
+        if (p.price) body.appendChild(h('span', { 'class': 'work-price' }, p.price));
+        body.appendChild(h('span', { 'class': 'abtn sm work-go' }, 'Visit site ↗'));
+        grid.appendChild(h('a', { 'class': 'work tilt', href: p.link, target: '_blank', rel: 'noopener noreferrer' }, art, body));
+      });
+    }).catch(function () { });
+  }
+
   /* ---------- boot ---------- */
   fingerprint().then(function (f) { fpHash = f.slice(0, 64); }).catch(function () { fpHash = ''; }).then(function () {
     return api('/api/config');
-  }).then(function (c) { cfg = c; renderConfig(); return loadMe(); }).then(function () { calc(); loadTestimonials(); }).catch(function (e) { offlineBanner(e.message); });
+  }).then(function (c) { cfg = c; renderConfig(); return loadMe(); }).then(function () { calc(); loadTestimonials(); loadPortfolio(); }).catch(function (e) { offlineBanner(e.message); });
   function offlineBanner(msg) {
     var old = document.getElementById('offlineBanner'); if (old) old.remove();
     var d = h('div', { id: 'offlineBanner', style: 'position:fixed;left:12px;right:12px;top:84px;z-index:300;padding:16px 18px;border-radius:14px;background:#2a0f1c;border:1px solid #fb7185;color:#fff;font-size:14px;line-height:1.5;box-shadow:0 14px 40px rgba(0,0,0,.6)' }, h('b', null, 'Selov asx could not load. '), msg);
