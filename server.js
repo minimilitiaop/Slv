@@ -9,10 +9,23 @@
  *  - Admin dashboard HTML/JS are only served after a valid admin session cookie.
  *  - Admin password is scrypt-hashed; login is rate-limited with lockout.
  */
+// ---- friendly startup checks ------------------------------------------------
+if (Number(process.versions.node.split('.')[0]) < 18) {
+  console.error('\nSelov asx needs Node.js 18 or newer. You have ' + process.version + '.\nInstall the LTS version from https://nodejs.org and run again.\n');
+  process.exit(1);
+}
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+
+// Optional .env file (KEY=value per line) next to server.js. Real environment variables always win.
+try {
+  for (const line of fs.readFileSync(path.join(__dirname, '.env'), 'utf8').split(/\r?\n/)) {
+    const m = /^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/i.exec(line);
+    if (m && !line.trim().startsWith('#') && process.env[m[1]] === undefined) process.env[m[1]] = m[2].replace(/^(['"])(.*)\1$/, '$2');
+  }
+} catch { /* no .env file - that's fine */ }
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -27,7 +40,12 @@ const TRUST_PROXY = process.env.TRUST_PROXY === '1';
 let ADMIN_PATH = (process.env.ADMIN_PATH || '/adminsecretwow').replace(/\/+$/, '');
 if (!/^\/[A-Za-z0-9_\-]+$/.test(ADMIN_PATH)) ADMIN_PATH = '/adminsecretwow';
 
-fs.mkdirSync(UPLOADS, { recursive: true });
+try { fs.mkdirSync(UPLOADS, { recursive: true }); fs.accessSync(DATA, fs.constants.W_OK); } catch (e) {
+  console.error('\nCannot write to the data folder (' + DATA + '): ' + e.code + '\n' +
+    'This app saves its database and screenshots to disk, so it must run on a normal Node server/VPS\n' +
+    '(not a read-only or serverless host such as Vercel/Netlify/GitHub Pages).\n');
+  process.exit(1);
+}
 
 /* ------------------------------------------------------------------ DB */
 const DEFAULT_SETTINGS = () => ({
@@ -48,7 +66,22 @@ function freshDb() {
   return {
     v: 1, users: {}, byName: {}, sessions: {}, orders: [], payments: [], ledger: [], feedback: [],
     chats: {}, devices: {}, fps: {}, ipFree: {}, imgHashes: {}, refs: {}, admin: null, settings: DEFAULT_SETTINGS(),
+    portfolio: null,
   };
+}
+
+function DEFAULT_PORTFOLIO() {
+  return [
+    { id: 'p1', title: 'MultiSave', link: 'https://multisave.freedev.app', badge: 'Downloader', tone: 'ok', price: 'Free',
+      desc: 'Download YouTube videos as MP4 or audio as MP3, plus media from TikTok, Facebook, Instagram, X, Pinterest, Snapchat, CapCut, Threads, Likee and Spotify.',
+      image: '/assets/portfolio-multisave.webp', visible: true },
+    { id: 'p2', title: 'JaySoundCloud', link: 'https://jaysoundcloud.onrender.com', badge: 'Music app', tone: 'warn', price: 'Free',
+      desc: 'Discover OPM through live radio, music recommendations and playlists in a simple web app.',
+      image: '/assets/portfolio-jaysoundcloud.webp', visible: true },
+    { id: 'p3', title: 'Stranger Cam', link: 'https://strangercamm.onrender.com/', badge: 'Video chat', tone: 'ok', price: 'Free',
+      desc: 'Meet new people through random video chat, or switch to text chat from your browser.',
+      image: '/assets/portfolio-strangercam.webp', visible: true },
+  ];
 }
 
 let db;
@@ -57,6 +90,7 @@ try { db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8')); } catch { db = freshDb(
   const f = freshDb();
   for (const k of Object.keys(f)) if (db[k] === undefined) db[k] = f[k];
   db.settings = Object.assign(DEFAULT_SETTINGS(), db.settings);
+  if (!Array.isArray(db.portfolio)) db.portfolio = DEFAULT_PORTFOLIO();
 }
 
 let saveTimer = null;
@@ -309,6 +343,61 @@ route('GET', '/api/config', {}, (c) => {
     stats: { users: Object.keys(db.users).length, orders: done.length, shares: done.reduce((a, o) => a + o.shares, 0) },
   });
 });
+
+/* ---- portfolio (public read, admin edit) */
+const pubProject = (p) => ({ id: p.id, title: p.title, link: p.link, badge: p.badge, tone: p.tone, price: p.price, desc: p.desc, image: p.image });
+route('GET', '/api/portfolio', {}, (c) => {
+  json(c.res, 200, db.portfolio.filter((p) => p.visible).map(pubProject));
+});
+route('GET', '/api/admin/portfolio', { admin: true }, (c) => { json(c.res, 200, db.portfolio); });
+route('POST', '/api/admin/portfolio', { admin: true, maxBody: 262144 }, (c) => {
+  const list = c.body.items;
+  if (!Array.isArray(list) || list.length > 24) throw bad('Invalid project list (max 24)');
+  const old = new Map(db.portfolio.map((p) => [p.id, p]));
+  const out = [];
+  const ids = new Set();
+  for (const it of list) {
+    const title = str(it.title, 60, 1);
+    const link = String(it.link || '').trim();
+    let u; try { u = new URL(link); } catch { throw bad('Link must be a full URL like https://example.com'); }
+    if (!/^https?:$/.test(u.protocol) || link.length > 300) throw bad('Link must start with http:// or https://');
+    let id = /^[a-z0-9]{2,16}$/.test(String(it.id || '')) ? it.id : 'p' + crypto.randomBytes(4).toString('hex');
+    if (ids.has(id)) id = 'p' + crypto.randomBytes(4).toString('hex');
+    ids.add(id);
+    const prev = old.get(id);
+    let image = prev ? prev.image : '';
+    if (it.image === '') image = '';
+    out.push({
+      id, title, link: u.href,
+      badge: String(it.badge || '').trim().slice(0, 24),
+      tone: it.tone === 'warn' ? 'warn' : 'ok',
+      price: String(it.price || '').trim().slice(0, 40),
+      desc: String(it.desc || '').trim().slice(0, 300),
+      image, visible: it.visible !== false,
+    });
+  }
+  for (const p of db.portfolio) {
+    if (!ids.has(p.id) || (out.find((o) => o.id === p.id).image === '' && p.image)) removePfFile(p.image);
+  }
+  db.portfolio = out;
+  save();
+  json(c.res, 200, db.portfolio);
+});
+route('POST', '/api/admin/portfolio/image', { admin: true, maxBody: 9 * 1048576 }, (c) => {
+  const p = db.portfolio.find((x) => x.id === String(c.body.id || ''));
+  if (!p) throw new HttpError(404, 'Save the project first, then upload its image');
+  const { buf, ext } = decodeImage(c.body.image, 6 * 1048576);
+  const name = 'pf-' + p.id + '-' + crypto.randomBytes(3).toString('hex') + '.' + ext;
+  fs.writeFileSync(path.join(UPLOADS, name), buf);
+  removePfFile(p.image);
+  p.image = '/media/' + name;
+  save();
+  json(c.res, 200, { image: p.image });
+});
+function removePfFile(img) {
+  const m = /^\/media\/(pf-[a-z0-9-]+\.(?:jpg|png|webp))$/.exec(img || '');
+  if (m) { try { fs.unlinkSync(path.join(UPLOADS, m[1])); } catch { /* gone */ } }
+}
 route('GET', '/api/testimonials', {}, (c) => {
   json(c.res, 200, db.feedback.filter((f) => f.public).slice(-12).reverse().map((f) => ({ name: f.name, rating: f.rating, message: f.message })));
 });
@@ -358,8 +447,9 @@ route('POST', '/api/logout', {}, (c) => {
   setCookie(c.res, 'sv_u', '', { maxAge: 0 });
   json(c.res, 200, { ok: true });
 });
-route('GET', '/api/me', { auth: 'user' }, (c) => {
-  const u = c.user;
+route('GET', '/api/me', {}, (c) => {
+  const u = getUserFromReq(c.req);
+  if (!u) return json(c.res, 200, { user: null });
   const fp = String(c.query.get('fp') || '');
   json(c.res, 200, {
     user: pubUser(u),
@@ -662,7 +752,7 @@ route('POST', '/api/admin/feedback/:id', { admin: true }, (c) => {
 
 route('GET', '/api/admin/settings', { admin: true }, (c) => json(c.res, 200, db.settings));
 route('POST', '/api/admin/settings', { admin: true }, (c) => {
-  const b = c.body, s = db.settings;
+  const s = db.settings, b = Object.assign({}, s, c.body);
   const int = (v, lo, hi, label) => { const n = Math.floor(Number(v)); if (!Number.isFinite(n) || n < lo || n > hi) throw bad(`${label} must be ${lo}-${hi}`); return n; };
   s.freeShares = int(b.freeShares, 1, 10000, 'Free shares');
   s.maxFreePerIp = int(b.maxFreePerIp, 1, 100, 'Free claims per IP');
@@ -800,6 +890,8 @@ const server = http.createServer(async (req, res) => {
       return serveHtmlPage(res, path.join(ROOT, pathname.slice(1)), nonce);
     }
     if (pathname.startsWith('/img/')) return serveDir(res, PUBLIC, pathname, 'public, max-age=300');
+    if (pathname.startsWith('/assets/')) return serveDir(res, path.join(ROOT, 'assets'), pathname.slice(8), 'public, max-age=3600');
+    if (/^\/media\/pf-[a-z0-9-]+\.(jpg|png|webp)$/.test(pathname)) return serveDir(res, UPLOADS, pathname.slice(7), 'public, max-age=86400, immutable');
     res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
     return res.end('Not found');
   } catch (e) {
@@ -810,6 +902,12 @@ const server = http.createServer(async (req, res) => {
   }
 });
 server.requestTimeout = 60000;
+server.on('error', (e) => {
+  if (e.code === 'EADDRINUSE') console.error(`\nPort ${PORT} is already in use (another copy of the server is probably running).\nClose it, or use another port:  PORT=3001 node server.js   (Windows: set PORT in .env)\n`);
+  else if (e.code === 'EACCES') console.error(`\nNot allowed to use port ${PORT}. Try a port above 1024, e.g. PORT=3000.\n`);
+  else console.error(e);
+  process.exit(1);
+});
 server.listen(PORT, HOST, () => {
   console.log(`Selov asx running → http://localhost:${PORT}   (admin: ${ADMIN_PATH})`);
 });
